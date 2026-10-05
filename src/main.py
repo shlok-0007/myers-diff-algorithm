@@ -1,4 +1,5 @@
 import sys
+from array import array
 
 
 KEEP = " "
@@ -23,14 +24,16 @@ def read_lines(path):
 
 
 # ============================================================
-# LINEAR-SPACE MYERS
+# COMPACT MYERS DIFF
 #
-# Returns a minimal edit script.
+# Each V frontier stores only the active diagonals:
 #
-# Unlike the normal Myers implementation, this does NOT keep
-# every V array for traceback.
+# d = 0 -> 1 value
+# d = 1 -> 2 values
+# d = 2 -> 3 values
+# ...
 #
-# Working memory: O(min(N, M))
+# array('i') is much smaller than Python dict/list objects.
 # ============================================================
 
 def myers_middle(a, b):
@@ -43,6 +46,149 @@ def myers_middle(a, b):
     if m == 0:
         return [(DELETE, x) for x in a]
 
+    max_d = n + m
+
+    # v[k + offset] -> furthest x
+    offset = max_d + 1
+    v = array("i", [0]) * (2 * max_d + 3)
+
+    trace = []
+
+    for d in range(max_d + 1):
+
+        # Store ONLY the values belonging to this d.
+        # k = -d, -d+2, ..., d
+        current = array("i", [0]) * (d + 1)
+
+        for j in range(d + 1):
+            k = -d + 2 * j
+            idx = k + offset
+
+            if k == -d:
+                x = v[idx + 1]
+
+            elif k == d:
+                x = v[idx - 1] + 1
+
+            elif v[idx - 1] < v[idx + 1]:
+                x = v[idx + 1]
+
+            else:
+                x = v[idx - 1] + 1
+
+            y = x - k
+
+            while x < n and y < m and a[x] == b[y]:
+                x += 1
+                y += 1
+
+            current[j] = x
+            v[idx] = x
+
+            if x >= n and y >= m:
+                trace.append(current)
+                return backtrack_compact(
+                    trace,
+                    a,
+                    b
+                )
+
+        trace.append(current)
+
+    return []
+
+
+def backtrack_compact(trace, a, b):
+    x = len(a)
+    y = len(b)
+
+    edits = []
+
+    for d in range(len(trace) - 1, 0, -1):
+
+        previous = trace[d - 1]
+
+        k = x - y
+
+        # Previous frontier has diagonals:
+        #
+        # -(d-1), -(d-3), ..., d-1
+        #
+        # Convert previous k to array index.
+        if k == -d:
+            previous_k = k + 1
+
+        elif k == d:
+            previous_k = k - 1
+
+        else:
+            # Compare V[k-1] and V[k+1].
+            #
+            # Previous array index:
+            # index = (k + (d-1)) // 2
+            #
+            left_index = (k - 1 + (d - 1)) // 2
+            right_index = (k + 1 + (d - 1)) // 2
+
+            if previous[left_index] < previous[right_index]:
+                previous_k = k + 1
+            else:
+                previous_k = k - 1
+
+        previous_index = (
+            previous_k + (d - 1)
+        ) // 2
+
+        previous_x = previous[previous_index]
+        previous_y = previous_x - previous_k
+
+        # Follow the diagonal.
+        while x > previous_x and y > previous_y:
+            x -= 1
+            y -= 1
+
+            edits.append(
+                (KEEP, a[x])
+            )
+
+        # Insertion.
+        if x == previous_x:
+            y -= 1
+
+            edits.append(
+                (INSERT, b[y])
+            )
+
+        # Deletion.
+        else:
+            x -= 1
+
+            edits.append(
+                (DELETE, a[x])
+            )
+
+    # Remaining common prefix.
+    while x > 0 and y > 0:
+        x -= 1
+        y -= 1
+
+        edits.append(
+            (KEEP, a[x])
+        )
+
+    edits.reverse()
+
+    return edits
+
+
+# ============================================================
+# TOP LEVEL MYERS DIFF
+# ============================================================
+
+def myers_diff(a, b):
+    n = len(a)
+    m = len(b)
+
     # --------------------------------------------------------
     # Common prefix
     # --------------------------------------------------------
@@ -50,7 +196,10 @@ def myers_middle(a, b):
     prefix = 0
     limit = min(n, m)
 
-    while prefix < limit and a[prefix] == b[prefix]:
+    while (
+        prefix < limit
+        and a[prefix] == b[prefix]
+    ):
         prefix += 1
 
     # --------------------------------------------------------
@@ -66,222 +215,37 @@ def myers_middle(a, b):
     ):
         suffix += 1
 
-    result = []
+    edits = []
 
+    # Prefix
     for i in range(prefix):
-        result.append((KEEP, a[i]))
-
-    middle_a = a[prefix:n - suffix]
-    middle_b = b[prefix:m - suffix]
-
-    if middle_a or middle_b:
-        result.extend(_linear_myers(middle_a, middle_b))
-
-    for i in range(n - suffix, n):
-        result.append((KEEP, a[i]))
-
-    return result
-
-
-def _linear_myers(a, b):
-    n = len(a)
-    m = len(b)
-
-    if n == 0:
-        return [(INSERT, x) for x in b]
-
-    if m == 0:
-        return [(DELETE, x) for x in a]
-
-    # Very small cases avoid allocating Myers frontiers.
-    if n == 1:
-        item = a[0]
-
-        for j, value in enumerate(b):
-            if item == value:
-                return (
-                    [(INSERT, x) for x in b[:j]]
-                    + [(KEEP, item)]
-                    + [(INSERT, x) for x in b[j + 1:]]
-                )
-
-        return (
-            [(DELETE, item)]
-            + [(INSERT, x) for x in b]
+        edits.append(
+            (KEEP, a[i])
         )
 
-    if m == 1:
-        item = b[0]
+    a_end = n - suffix
+    b_end = m - suffix
 
-        for i, value in enumerate(a):
-            if item == value:
-                return (
-                    [(DELETE, x) for x in a[:i]]
-                    + [(KEEP, item)]
-                    + [(DELETE, x) for x in a[i + 1:]]
-                )
-
-        return (
-            [(DELETE, x) for x in a]
-            + [(INSERT, item)]
+    # Middle
+    if prefix < a_end or prefix < b_end:
+        edits.extend(
+            myers_middle(
+                a[prefix:a_end],
+                b[prefix:b_end]
+            )
         )
 
-    # --------------------------------------------------------
-    # Myers middle split
-    # --------------------------------------------------------
+    # Suffix
+    for i in range(a_end, n):
+        edits.append(
+            (KEEP, a[i])
+        )
 
-    total = n + m
-    max_d = (total + 1) // 2
-    delta = n - m
-
-    size = 2 * max_d + 3
-    offset = max_d + 1
-
-    forward = [0] * size
-    reverse = [n] * size
-
-    odd = delta & 1
-
-    for d in range(max_d + 1):
-
-        # ====================================================
-        # Forward search
-        # ====================================================
-
-        for k in range(-d, d + 1, 2):
-            idx = k + offset
-
-            if k == -d:
-                x = forward[idx + 1]
-
-            elif k == d:
-                x = forward[idx - 1] + 1
-
-            elif forward[idx - 1] < forward[idx + 1]:
-                x = forward[idx + 1]
-
-            else:
-                x = forward[idx - 1] + 1
-
-            y = x - k
-
-            while (
-                x < n
-                and y < m
-                and a[x] == b[y]
-            ):
-                x += 1
-                y += 1
-
-            forward[idx] = x
-
-            # Forward and reverse paths overlap.
-            if odd:
-                reverse_k = delta - k
-
-                if (
-                    -(d - 1) <= reverse_k <= d - 1
-                    and x >= reverse[reverse_k + offset]
-                ):
-                    split_x = x
-                    split_y = y
-
-                    return _split(
-                        a,
-                        b,
-                        split_x,
-                        split_y
-                    )
-
-        # ====================================================
-        # Reverse search
-        # ====================================================
-
-        for k in range(-d, d + 1, 2):
-            idx = k + offset
-
-            if k == -d:
-                x = reverse[idx + 1] - 1
-
-            elif k == d:
-                x = reverse[idx - 1]
-
-            elif reverse[idx - 1] > reverse[idx + 1]:
-                x = reverse[idx - 1]
-
-            else:
-                x = reverse[idx + 1] - 1
-
-            y = x - (delta - k)
-
-            while (
-                x > 0
-                and y > 0
-                and a[x - 1] == b[y - 1]
-            ):
-                x -= 1
-                y -= 1
-
-            reverse[idx] = x
-
-            if not odd:
-                forward_k = delta - k
-
-                if (
-                    -d <= forward_k <= d
-                    and forward[forward_k + offset] >= x
-                ):
-                    split_x = x
-                    split_y = y
-
-                    return _split(
-                        a,
-                        b,
-                        split_x,
-                        split_y
-                    )
-
-    # Defensive fallback.
-    return (
-        [(DELETE, x) for x in a]
-        + [(INSERT, x) for x in b]
-    )
-
-
-def _split(a, b, x, y):
-    left = _linear_myers(
-        a[:x],
-        b[:y]
-    )
-
-    right = _linear_myers(
-        a[x:],
-        b[y:]
-    )
-
-    left.extend(right)
-
-    return left
-
-
-# ============================================================
-# TOP LEVEL DIFF
-# ============================================================
-
-def myers_diff(a, b):
-    edits = myers_middle(a, b)
     return reorder_change_blocks(edits)
 
 
 # ============================================================
-# ORDERING
-#
-# Inside every change block:
-#
-# DELETE DELETE ...
-# INSERT INSERT ...
-#
-# This guarantees that applying KEEP + INSERT reconstructs B.
+# ORDER CHANGE BLOCKS
 # ============================================================
 
 def reorder_change_blocks(edits):
@@ -291,17 +255,23 @@ def reorder_change_blocks(edits):
     length = len(edits)
 
     while i < length:
+
         op, item = edits[i]
 
         if op == KEEP:
-            result.append((KEEP, item))
+            result.append(
+                (KEEP, item)
+            )
             i += 1
             continue
 
         deletes = []
         inserts = []
 
-        while i < length and edits[i][0] != KEEP:
+        while (
+            i < length
+            and edits[i][0] != KEEP
+        ):
             op, item = edits[i]
 
             if op == DELETE:
@@ -311,8 +281,15 @@ def reorder_change_blocks(edits):
 
             i += 1
 
-        result.extend((DELETE, x) for x in deletes)
-        result.extend((INSERT, x) for x in inserts)
+        result.extend(
+            (DELETE, item)
+            for item in deletes
+        )
+
+        result.extend(
+            (INSERT, item)
+            for item in inserts
+        )
 
     return result
 
@@ -328,17 +305,30 @@ def write_prefixed(prefix, line):
 
 
 def run_lines(a_lines, b_lines):
-    edits = myers_diff(a_lines, b_lines)
+    edits = myers_diff(
+        a_lines,
+        b_lines
+    )
 
     for op, line in edits:
+
         if op == KEEP:
-            write_prefixed(b" ", line)
+            write_prefixed(
+                b" ",
+                line
+            )
 
         elif op == DELETE:
-            write_prefixed(b"-", line)
+            write_prefixed(
+                b"-",
+                line
+            )
 
         else:
-            write_prefixed(b"+", line)
+            write_prefixed(
+                b"+",
+                line
+            )
 
 
 # ============================================================
@@ -355,29 +345,41 @@ def to_ranges(positions):
     end = start + 1
 
     for pos in positions[1:]:
+
         if pos == end:
             end += 1
+
         else:
             ranges.append(
-                str(start) + "-" + str(end)
+                str(start)
+                + "-"
+                + str(end)
             )
+
             start = pos
             end = pos + 1
 
     ranges.append(
-        str(start) + "-" + str(end)
+        str(start)
+        + "-"
+        + str(end)
     )
 
     return ",".join(ranges)
 
 
 # ============================================================
-# CHARACTER-LEVEL DIFF
+# CHARACTER CHANGES
 # ============================================================
 
 def changed_ranges(old_line, new_line):
-    old_chars = list(old_line.decode("utf-8"))
-    new_chars = list(new_line.decode("utf-8"))
+    old_chars = list(
+        old_line.decode("utf-8")
+    )
+
+    new_chars = list(
+        new_line.decode("utf-8")
+    )
 
     edits = myers_diff(
         old_chars,
@@ -397,11 +399,15 @@ def changed_ranges(old_line, new_line):
             new_index += 1
 
         elif op == DELETE:
-            old_positions.append(old_index)
+            old_positions.append(
+                old_index
+            )
             old_index += 1
 
         else:
-            new_positions.append(new_index)
+            new_positions.append(
+                new_index
+            )
             new_index += 1
 
     return (
@@ -411,25 +417,38 @@ def changed_ranges(old_line, new_line):
 
 
 # ============================================================
-# HIGHLIGHT
+# HIGHLIGHT CHANGE BLOCK
 # ============================================================
 
-def write_change_block(deletes, inserts):
+def write_change_block(
+    deletes,
+    inserts
+):
     pair_count = min(
         len(deletes),
         len(inserts)
     )
 
     for line in deletes:
-        write_prefixed(b"-", line)
+        write_prefixed(
+            b"-",
+            line
+        )
 
     for i, line in enumerate(inserts):
-        write_prefixed(b"+", line)
+
+        write_prefixed(
+            b"+",
+            line
+        )
 
         if i < pair_count:
-            old_ranges, new_ranges = changed_ranges(
-                deletes[i],
-                line
+
+            old_ranges, new_ranges = (
+                changed_ranges(
+                    deletes[i],
+                    line
+                )
             )
 
             marker = (
@@ -440,10 +459,19 @@ def write_change_block(deletes, inserts):
                 + "\n"
             ).encode("ascii")
 
-            sys.stdout.buffer.write(marker)
+            sys.stdout.buffer.write(
+                marker
+            )
 
 
-def run_highlight(a_lines, b_lines):
+# ============================================================
+# HIGHLIGHT
+# ============================================================
+
+def run_highlight(
+    a_lines,
+    b_lines
+):
     edits = myers_diff(
         a_lines,
         b_lines
@@ -453,10 +481,16 @@ def run_highlight(a_lines, b_lines):
     length = len(edits)
 
     while i < length:
+
         op, line = edits[i]
 
         if op == KEEP:
-            write_prefixed(b" ", line)
+
+            write_prefixed(
+                b" ",
+                line
+            )
+
             i += 1
             continue
 
@@ -467,10 +501,12 @@ def run_highlight(a_lines, b_lines):
             i < length
             and edits[i][0] != KEEP
         ):
+
             op, line = edits[i]
 
             if op == DELETE:
                 deletes.append(line)
+
             else:
                 inserts.append(line)
 
@@ -487,9 +523,11 @@ def run_highlight(a_lines, b_lines):
 # ============================================================
 
 def main(argv):
+
     if (
         len(argv) != 4
-        or argv[1] not in ("lines", "highlight")
+        or argv[1]
+        not in ("lines", "highlight")
     ):
         print(
             "usage: main.py lines|highlight A B",
@@ -500,22 +538,32 @@ def main(argv):
     command = argv[1]
 
     try:
-        a_lines = read_lines(argv[2])
-        b_lines = read_lines(argv[3])
+        a_lines = read_lines(
+            argv[2]
+        )
+
+        b_lines = read_lines(
+            argv[3]
+        )
 
     except OSError as exc:
+
         print(
             str(exc),
             file=sys.stderr
         )
+
         return 2
 
     if command == "lines":
+
         run_lines(
             a_lines,
             b_lines
         )
+
     else:
+
         run_highlight(
             a_lines,
             b_lines
@@ -525,4 +573,6 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(
+        main(sys.argv)
+    )
